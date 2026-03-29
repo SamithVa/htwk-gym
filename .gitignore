@@ -1,0 +1,5 @@
+videos/
+logs/
+
+# python
+__pycache__/
