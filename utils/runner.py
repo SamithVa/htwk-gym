@@ -274,21 +274,27 @@ class Runner:
             mean_actor_loss /= self.cfg["runner"]["mini_epochs"]
             mean_bound_loss /= self.cfg["runner"]["mini_epochs"]
             mean_entropy /= self.cfg["runner"]["mini_epochs"]
-            self.recorder.record_statistics(
-                {
-                    "value_loss": mean_value_loss,
-                    "actor_loss": mean_actor_loss,
-                    "bound_loss": mean_bound_loss,
-                    "entropy": mean_entropy,
-                    "kl_mean": kl_mean,
-                    "lr": self.learning_rate,
-                    "curriculum/mean_lin_vel_level": self.env.mean_lin_vel_level,
-                    "curriculum/mean_ang_vel_level": self.env.mean_ang_vel_level,
-                    "curriculum/max_lin_vel_level": self.env.max_lin_vel_level,
-                    "curriculum/max_ang_vel_level": self.env.max_ang_vel_level,
-                },
-                it,
-            )
+            stats = {
+                "value_loss": mean_value_loss,
+                "actor_loss": mean_actor_loss,
+                "bound_loss": mean_bound_loss,
+                "entropy": mean_entropy,
+                "kl_mean": kl_mean,
+                "lr": self.learning_rate,
+                "curriculum/mean_lin_vel_level": self.env.mean_lin_vel_level,
+                "curriculum/mean_ang_vel_level": self.env.mean_ang_vel_level,
+                "curriculum/max_lin_vel_level": self.env.max_lin_vel_level,
+                "curriculum/max_ang_vel_level": self.env.max_ang_vel_level,
+            }
+            # KickingCurriculum exposes stage metrics as attributes.
+            if hasattr(self.env, "curriculum_unlock_stage"):
+                stats["curriculum/unlock_stage"] = self.env.curriculum_unlock_stage
+                stats["curriculum/ema_tracking"]  = self.env.curriculum_ema_tracking
+                stats["curriculum/ema_proximity"] = self.env.curriculum_ema_proximity
+                stats["curriculum/stage0_envs"]   = self.env.curriculum_stage0_envs
+                stats["curriculum/stage1_envs"]   = self.env.curriculum_stage1_envs
+                stats["curriculum/stage2_envs"]   = self.env.curriculum_stage2_envs
+            self.recorder.record_statistics(stats, it)
 
             if (it + 1) % self.cfg["runner"]["save_interval"] == 0:
                 self.recorder.save(

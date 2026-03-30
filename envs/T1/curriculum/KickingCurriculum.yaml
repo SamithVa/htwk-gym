@@ -1,0 +1,424 @@
+basic:
+  checkpoint: null        # Set to path of a ParameterWalk checkpoint to warm-start Stage 0
+  headless: false
+  max_iterations: 50000
+  sim_device: "cpu"
+  rl_device: "cpu"
+  seed: -1
+  description: "3-stage curriculum: walk → approach → kick"
+  enable_csv_logging: false
+
+env:
+  num_envs: 1
+  num_observations: 44   # KickingCurriculum.__init__ adds +3 (nav_commands) → 47 total
+  num_privileged_obs: 20
+  num_actions: 12
+  env_spacing: 5.
+
+runner:
+  horizon_length: 24
+  mini_epochs: 20
+  save_interval: 500
+  use_wandb: true
+
+viewer:
+  pos: [3., -3., 2.]
+  lookat: [15., 0., 0.]
+  record_video: true
+  record_interval: 5.
+  record_env_idx: 0
+
+algorithm:
+  learning_rate: 1.e-5
+  gamma: 0.995
+  lam: 0.95
+  bound_coef: 1.0
+  entropy_coef: -0.01
+  symmetric_coef: 10.
+  desired_kl: 0.01
+
+sim:
+  dt: 0.002
+  substeps: 1
+  up_axis: "z"
+  gravity: [0.0, 0.0, -9.81]
+  physics_engine: "physx"
+  physx:
+    solver_type: 1
+    num_position_iterations: 4
+    num_velocity_iterations: 1
+    contact_offset: 0.02
+    rest_offset: 0.0
+    bounce_threshold_velocity: 0.2
+    max_depenetration_velocity: 100.0
+    default_buffer_size_multiplier: 5.0
+    max_gpu_contact_pairs: 8388608
+    num_subscenes: 4
+    contact_collection: 1
+
+asset:
+  file: "resources/T1/T1_locomotion.urdf"
+  mujoco_file: "resources/T1/T1_locomotion.xml"
+  name: "T1"
+  base_name: "Trunk"
+  foot_names: ["left_foot_link", "right_foot_link"]
+  disable_gravity: false
+  default_dof_drive_mode: 3
+  collapse_fixed_joints: true
+  fix_base_link: false
+  self_collisions: 0
+  replace_cylinder_with_capsule: true
+  flip_visual_attachments: false
+  density: 0.001
+  angular_damping: 0.
+  linear_damping: 0.
+  max_angular_velocity: 1000.
+  max_linear_velocity: 1000.
+  armature: 0.
+  thickness: 0.01
+  feet_edge_pos: [[ 0.1215,  0.05, -0.03],
+                  [ 0.1215, -0.05, -0.03],
+                  [-0.1015,  0.05, -0.03],
+                  [-0.1015, -0.05, -0.03]]
+
+ball:
+  file: "resources/T1/ball.urdf"
+  name: "ball"
+  init_pos: [0.3, 0.0, 0.06]
+  init_rot: [0.0, 0.0, 0.0, 1.0]
+  init_lin_vel: [0.0, 0.0, 0.0]
+  init_ang_vel: [0.0, 0.0, 0.0]
+  restitution: 0.0
+  friction: 1
+  rolling_friction: 1
+  contact_offset: 0.005
+  density: 0.001
+  thickness: 0.01
+
+init_state:
+  pos: [0.0, 0.0, 0.72]
+  rot: [0.0, 0.0, 0.0, 1.0]
+  lin_vel: [0.0, 0.0, 0.0]
+  ang_vel: [0.0, 0.0, 0.0]
+  ball_pos: [0.5, 0.0, 0.05]
+  default_joint_angles: {"Hip_Pitch": -0.2, "Knee_Pitch": 0.4, "Ankle_Pitch": -0.25, "default": 0.}
+
+control:
+  stiffness: {"Hip": 200., "Knee": 200., "Ankle": 50.}
+  damping: {"Hip": 5., "Knee": 5., "Ankle": 1.}
+  action_scale: 1.
+  decimation: 10
+
+terrain:
+  type: "plane"
+  static_friction: 1.0
+  dynamic_friction: 1.0
+  restitution: 0.
+  terrain_length: 10.
+  terrain_width: 10.
+  border_size: 5.
+  num_terrains: 8
+  terrain_proportions: [0.0, 0.0, 0.5, 0.5]
+  slope: 0.1
+  random_height: 0.1
+  discrete_height: 0.02
+  horizontal_scale: 0.1
+  vertical_scale: 0.005
+  slope_threshold: 2.0
+
+# ---------------------------------------------------------------------------
+# Curriculum configuration
+# ---------------------------------------------------------------------------
+curriculum:
+  # Set initial_stage to skip earlier phases when loading a checkpoint:
+  #   0 = start from walk-only  (default, full curriculum)
+  #   1 = skip walk, start from approach
+  #   2 = skip walk+approach, start directly from kick
+  initial_stage: 0
+
+  # ── Performance-based stage advancement ─────────────────────────────────
+  # Stage 0 → 1 unlocks when BOTH conditions are met:
+  #   (a) EMA of walk tracking reward >= stage0_tracking_threshold  (0–1 scale)
+  #   (b) total env-steps             >= stage0_min_steps  (safety floor)
+  stage0_tracking_threshold: 0.9   # mean tracking quality needed to leave walk stage
+  stage0_min_steps: 2000000000         # ~20k iterations (4096 envs × 24 horizon)
+  #                                    1 iteration ≈ 98k steps
+
+  # Stage 1 → 2 unlocks when BOTH conditions are met:
+  #   (a) EMA of approach proximity reward (stage-1 envs only) >= threshold
+  #   (b) total env-steps >= stage1_min_steps
+  stage1_proximity_threshold: 0.5  # mean proximity quality needed to leave approach stage
+  stage1_min_steps: 3000000000     # ~30k iterations (10k more after walk phase)
+
+  # Stage 1 → Stage 2 proximity trigger
+  kick_approach_range: 0.3           # metres — robot must be this close to ball
+  kick_approach_heading_threshold: 0.5   # radians (~28°) — robot must face ball
+
+  # Stage-1 ball-directed nav command limits
+  nav_max_lin_vel: 0.5   # m/s
+  nav_max_ang_vel: 1.0   # rad/s
+
+  # Stage-0 random walk command ranges
+  stage0_lin_vel_range: [-0.5, 0.5]   # m/s (x and ±0.5×y)
+  stage0_ang_vel_range: [-1.0, 1.0]   # rad/s
+  stage0_resample_time_lo_s: 8.0      # seconds between command resamples
+  stage0_resample_time_hi_s: 12.0
+
+  # nav_ball_proximity reward shaping
+  nav_ball_proximity_sigma: 1.5   # metres — reward decay distance
+
+  # ── Per-stage reward multipliers ─────────────────────────────────────────
+  # These multiply the base reward scale for each term.
+  # A value of 0.0 disables the term; 1.0 leaves it unchanged.
+  # Rewards not listed here keep their base scale (implicit 1.0).
+  stage_reward_multipliers:
+    # Stage 0: walk only — disable all ball/kick/nav-approach rewards
+    "0":
+      nav_ball_proximity: 0.0
+      ball_velocity_target_direction: 0.0
+      kicking_foot_approach_ball_stationary: 0.0
+      body_alignment_for_kick: 0.0
+      body_angle: 0.0
+      ball_acceleration: 0.0
+      waiting: 0.0
+
+    # Stage 1: approach — activate navigation rewards, disable pure-kick rewards
+    "1":
+      nav_ball_proximity: 1.0          # reward getting closer to ball
+      body_alignment_for_kick: 0.5     # encourage facing ball-to-goal axis
+      kicking_foot_approach_ball_stationary: 0.3  # guide final foot placement
+      ball_velocity_target_direction: 0.0
+      ball_acceleration: 0.0
+      waiting: 0.0
+
+    # Stage 2: kick — zero nav tracking (commands are 0), full kick rewards
+    "2":
+      nav_ball_proximity: 0.0
+      tracking_lin_vel_x: 0.0
+      tracking_lin_vel_y: 0.0
+      tracking_ang_vel: 0.0
+
+# ---------------------------------------------------------------------------
+# Commands (only used for curriculum/resample bookkeeping; nav commands
+# are computed programmatically in KickingCurriculum)
+# ---------------------------------------------------------------------------
+commands:
+  num_commands: 0
+  still_proportion: 0.1
+  lin_vel_x_resolution: 0.2
+  lin_vel_y_resolution: 0.1
+  ang_vel_resolution: 0.2
+  episode_length_toler: 0.1
+  lin_vel_x_toler: 0.4
+  lin_vel_y_toler: 0.2
+  ang_vel_yaw_toler: 0.2
+  curriculum: false
+  update_rate: 0.1
+  lin_vel_levels: 10
+  ang_vel_levels: 10
+
+normalization:
+  gravity: 1.0
+  lin_vel: 1.0
+  ang_vel: 1.0
+  dof_pos: 1.0
+  dof_vel: 0.1
+  filter_weight: 0.1
+  push_force: 0.1
+  push_torque: 0.5
+  clip_actions: 1.
+  ball_pos: 1.0
+
+noise:
+  gravity:
+    range: [0., 0.01]
+    operation: "additive"
+    distribution: "gaussian"
+  lin_vel:
+    range: [0., 0.05]
+    operation: "additive"
+    distribution: "gaussian"
+  ang_vel:
+    range: [0., 0.1]
+    operation: "additive"
+    distribution: "gaussian"
+  dof_pos:
+    range: [0., 0.01]
+    operation: "additive"
+    distribution: "gaussian"
+  dof_vel:
+    range: [0., 0.1]
+    operation: "additive"
+    distribution: "gaussian"
+  height:
+    range: [0., 0.02]
+    operation: "additive"
+    distribution: "gaussian"
+  ball_pos:
+    range: [-0.01, 0.01]
+    operation: "additive"
+    distribution: "gaussian"
+
+randomization:
+  init_dof_pos:
+    range: [0., 0.05]
+    operation: "additive"
+    distribution: "gaussian"
+  init_base_pos_xy:
+    range: [-1., 1.]
+    operation: "additive"
+    distribution: "uniform"
+  init_base_lin_vel_xy:
+    range: [0., 0.1]
+    operation: "additive"
+    distribution: "gaussian"
+  init_base_ang:
+    range: [-0.1, 0.1]
+    operation: "additive"
+    distribution: "gaussian"
+  ball_init_pos_x:
+    range: [0.25, 0.4]
+    operation: "additive"
+    distribution: "uniform"
+  ball_init_pos_y:
+    range: [0, 0.2]
+    operation: "additive"
+    distribution: "uniform"
+  kick_interval_s: 2.
+  kick_lin_vel:
+    range: [0., 0.]
+    operation: "additive"
+    distribution: "gaussian"
+  kick_ang_vel:
+    range: [0., 0.0]
+    operation: "additive"
+    distribution: "gaussian"
+  push_interval_s: 5.
+  push_duration_s: 1.
+  push_force:
+    range: [0., 0.]
+    operation: "additive"
+    distribution: "gaussian"
+  push_torque:
+    range: [0., 0.]
+    operation: "additive"
+    distribution: "gaussian"
+  dof_stiffness:
+    range: [0.95, 1.05]
+    operation: "scaling"
+    distribution: "uniform"
+  dof_damping:
+    range: [0.95, 1.05]
+    operation: "scaling"
+    distribution: "uniform"
+  dof_friction:
+    range: [0.0, 2.0]
+    operation: "additive"
+    distribution: "uniform"
+  friction:
+    range: [0.1, 2.0]
+    operation: "additive"
+    distribution: "uniform"
+  compliance:
+    range: [0.5, 1.5]
+    operation: "additive"
+    distribution: "uniform"
+  restitution:
+    range: [0.1, 0.9]
+    operation: "additive"
+    distribution: "uniform"
+  base_com:
+    range: [-0.1, 0.1]
+    operation: "additive"
+    distribution: "uniform"
+  base_mass:
+    range: [0.8, 1.2]
+    operation: "scaling"
+    distribution: "uniform"
+  other_com:
+    range: [-0.005, 0.005]
+    operation: "additive"
+    distribution: "uniform"
+  other_mass:
+    range: [0.98, 1.02]
+    operation: "scaling"
+    distribution: "uniform"
+
+rewards:
+  scales:
+    survival: 0.25
+    tracking_lin_vel_x: 1.0      # tracks nav_commands[0] (overridden in KickingCurriculum)
+    tracking_lin_vel_y: 1.0      # tracks nav_commands[1]
+    tracking_ang_vel: 0.25       # tracks nav_commands[2]
+    base_height: -200.
+    orientation: -20.
+    torques: -2.e-4
+    torque_tiredness: -1.e-2
+    power: -2.e-3
+    lin_vel_z: -1.5
+    ang_vel_xy: -0.1
+    dof_vel: -3.e-4
+    dof_acc: -1.e-7
+    root_acc: -1.e-5
+    action_rate: -1.5
+    dof_pos_limits: -1.
+    feet_slip: -1.
+    feet_yaw_diff: -3.
+    feet_yaw_mean: -3.
+    feet_roll: -0.3
+    # Kick task rewards
+    ball_velocity_target_direction: 10.
+    kicking_foot_approach_ball_stationary: 10.
+    body_alignment_for_kick: 1.
+    body_angle: 0.1
+    ball_acceleration: 0.25
+    waiting: -1.0
+    # New: navigation proximity reward (disabled in stages 0 and 2 via multipliers)
+    nav_ball_proximity: 5.0
+
+  ball_rolling_scale:
+    waiting: 0.0
+    survival: 0.5
+    kicking_foot_approach_ball_stationary: 0.
+
+  episode_length_s: 7.
+  terminate_height: 0.45
+  terminate_vel: 50.
+  terminate_contacts_on: []
+  penalize_contacts_on: ["Trunk", "H1", "H2", "AL", "AR", "Waist", "Hip", "Shank", "Ankle"]
+  only_positive_rewards: false
+  tracking_sigma: 0.25
+  base_height_target: 0.68
+  soft_dof_pos_limit: 1.
+  soft_dof_vel_limit: 1.
+  soft_torque_limit: 1.
+  swing_period: 0.2
+  feet_distance_ref_x: 0.05
+  feet_distance_ref_y: 0
+  min_ball_vel_s: 2
+  max_ball_vel_x: 3
+
+  ball_target_position: [6.0, 0.0]
+  max_ball_vel_target_reward: 10.0
+  ball_vel_target_direction_sigma: 1.0
+  ball_velocity_decay_time: 0.1
+
+  kicking_foot_index: 0
+  ball_stationary_speed_threshold: 0.1
+  approach_proximity_sigma: 0.1
+  max_approach_reward: 50.0
+
+  kick_target_pos_world: [5.0, 0.0, 0.05]
+  alignment_to_ball_sigma: 0.5
+  alignment_to_target_sigma: 0.5
+  max_alignment_reward: 1.0
+
+  kick_detection_speed_increase_threshold: 0.5
+  ball_rest_speed_threshold_after_kick: 0.02
+  min_steps_travel_after_kick: 10
+
+  max_ball_still_time_s: 2
+  max_ball_moving_time_s: 5
+
+  ball_acceleration_scale: 80.0
+  max_ball_acceleration_reward: 80.0
