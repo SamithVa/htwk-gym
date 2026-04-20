@@ -795,9 +795,9 @@ class Kicking(BaseTask):
         self.last_root_vel[:] = self.root_states[:, 0, 7:13]
         self.last_feet_pos[:] = self.feet_pos
 
-        print(f"env_resets: {self.env_resets}, env_successes: {self.env_successes}, env_falling: {self.env_falling}")
-        if len(self.ball_velocities) > 0:
-            print(f"ball_velocities average: {np.mean(self.ball_velocities)}, std: {np.std(self.ball_velocities)}, max: {np.max(self.ball_velocities)}")
+        # print(f"env_resets: {self.env_resets}, env_successes: {self.env_successes}, env_falling: {self.env_falling}")
+        # if len(self.ball_velocities) > 0:
+        #     print(f"ball_velocities average: {np.mean(self.ball_velocities)}, std: {np.std(self.ball_velocities)}, max: {np.max(self.ball_velocities)}")
 
         return self.obs_buf, self.rew_buf, self.reset_buf, self.extras
 
@@ -1212,6 +1212,7 @@ class Kicking(BaseTask):
         return torch.clamp(reward_align_target, min=0.0, max=max_reward)
     
     def _reward_body_angle(self):
+        """Rewards keeping the robot's body relatively flat, which is important for effective kicking."""
         base_pitch, base_roll, base_yaw = get_euler_xyz(self.base_quat)
         pitch_normalized = (base_pitch + torch.pi) % (2 * torch.pi) - torch.pi
         roll_normalized = (base_roll + torch.pi) % (2 * torch.pi) - torch.pi
