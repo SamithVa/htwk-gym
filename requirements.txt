@@ -1,4 +1,6 @@
 tensorboard
 wandb
 imageio[ffmpeg]
-mujoco
+mujoco==2.3.6
+mujoco-python-viewer
+
