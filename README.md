@@ -4,11 +4,16 @@ HTWK Gym is an advanced reinforcement learning (RL) framework for humanoid robot
 
 [![parameter_walk_on_real_T1](https://github.com/NaoHTWK/htwk-gym/blob/main/htwk_walk01.gif?raw=true)](https://github.com/NaoHTWK/htwk-gym/blob/main/htwk_walk01.gif?raw=true)
 
+## Demo
+
+- **Sim2Sim Two-Policy Demo**: [sim2sim_two_policies.mp4](demo_videos/sim2sim_two_policies.mp4)
+
 ## Key Features
 
 - **Multi-Robot Platform Support**: Comprehensive support for both Booster T1 and K1 humanoid robots with specialized configurations
 - **Advanced Task Framework**: Sophisticated locomotion tasks including parameterized walking, ball-kicking behaviors, and adaptive gait control
 - **Enhanced Research Capabilities**: Improved logging, hierarchical organization, and extensive domain randomization for robust sim-to-real transfer
+- **Sim2Sim Evaluation Pipeline**: Headless MuJoCo rollout with policy switching between walking and kicking controllers, rendered directly to MP4
 - **Complete Training-to-Deployment Pipeline**: Full support for training, evaluating, and deploying policies in simulation and on real robots
 - **Multi-Format Export**: Support for PyTorch JIT, TensorFlow Lite, and ONNX model formats with optional quantization
 - **Real-Time Deployment**: Live robot control with Streamlit-based observation editor for parameterized walking
@@ -204,6 +209,45 @@ To test the policy in MuJoCo, run:
 $ python play_mujoco.py --task=T1/BaseWalk --checkpoint=-1
 ```
 
+#### Sim2Sim Two-Policy Rollout
+
+`sim2sim.py` runs a headless MuJoCo rollout for the T1 robot using two TorchScript policies:
+
+- `ParameterWalk` to approach the ball
+- `Kicking` to strike once the robot is close enough
+
+Before running `sim2sim.py`, export the latest training checkpoints to TorchScript:
+
+```sh
+$ python export_model.py --task=T1/ParameterWalk --checkpoint=-1
+$ python export_model.py --task=T1/Kicking --checkpoint=-1
+```
+
+Then launch the sim2sim rollout:
+
+```sh
+$ python sim2sim.py
+```
+
+Useful options:
+
+- `--walk-ckpt` / `--kick-ckpt`: Use specific exported `*.pt` policies instead of the newest files in `logs/`
+- `--ball-dist`: Initial ball distance in front of the robot
+- `--switch-dist`: Distance threshold for switching from walking to kicking
+- `--slowdown-dist`: Distance threshold for slowing the walking command before the kick
+- `--duration`: Rollout duration in seconds
+- `--out`: Output MP4 path
+
+Example:
+
+```sh
+$ python sim2sim.py --duration 12 --out demo_videos/sim2sim_two_policies.mp4
+```
+
+By default, the rendered video is written to `videos/sim2sim_<timestamp>.mp4`.
+
+Demo video: [sim2sim_two_policies.mp4](demo_videos/sim2sim_two_policies.mp4)
+
 ---
 
 ### 3. Deployment
@@ -352,6 +396,16 @@ $ python train.py --task=T1/Kicking --num_envs=1024
 
 # Test ball kicking
 $ python play.py --task=T1/Kicking --checkpoint=-1
+```
+
+### Sim2Sim Policy Switching
+```sh
+# Export the latest walking and kicking policies to TorchScript
+$ python export_model.py --task=T1/ParameterWalk --checkpoint=-1
+$ python export_model.py --task=T1/Kicking --checkpoint=-1
+
+# Run the MuJoCo two-policy sim2sim pipeline
+$ python sim2sim.py --duration 12
 ```
 
 ### K1 Robot Platform
