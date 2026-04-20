@@ -1,12 +1,12 @@
-# HTWK Gym
+<!-- # HTWK Gym
 
 HTWK Gym is an advanced reinforcement learning (RL) framework for humanoid robot locomotion, developed by [HTWK Robots](https://robots.htwk-leipzig.de/startseite). Built upon the foundation of [Booster Gym](https://github.com/BoosterRobotics/booster_gym/tree/main), HTWK Gym extends the original framework with significant enhancements for multi-robot support, advanced locomotion tasks, and improved research capabilities.
 
-[![parameter_walk_on_real_T1](https://github.com/NaoHTWK/htwk-gym/blob/main/htwk_walk01.gif?raw=true)](https://github.com/NaoHTWK/htwk-gym/blob/main/htwk_walk01.gif?raw=true)
+[![parameter_walk_on_real_T1](https://github.com/NaoHTWK/htwk-gym/blob/main/htwk_walk01.gif?raw=true)](https://github.com/NaoHTWK/htwk-gym/blob/main/htwk_walk01.gif?raw=true) -->
 
-## Demo
+## Sim2Sim Two-Policy Demo (MuJoCo)
 
-- **Sim2Sim Two-Policy Demo**: [sim2sim_two_policies.mp4](demo_videos/sim2sim_two_policies.mp4)
+[![Sim2Sim Two-Policy Demo](demo_videos/sim2sim_two_policies.gif)](demo_videos/sim2sim_two_policies.mp4)
 
 ## Key Features
 
@@ -246,7 +246,8 @@ $ python sim2sim.py --duration 12 --out demo_videos/sim2sim_two_policies.mp4
 
 By default, the rendered video is written to `videos/sim2sim_<timestamp>.mp4`.
 
-Demo video: [sim2sim_two_policies.mp4](demo_videos/sim2sim_two_policies.mp4)
+Demo preview: [sim2sim_two_policies.gif](demo_videos/sim2sim_two_policies.gif)  
+Full video: [sim2sim_two_policies.mp4](demo_videos/sim2sim_two_policies.mp4)
 
 ---
 
