@@ -126,10 +126,13 @@ class Runner:
         cfg_file = os.path.join("envs", "{}.yaml".format(self.args.task))
         with open(cfg_file, "r", encoding="utf-8") as f:
             self.cfg = yaml.load(f.read(), Loader=yaml.FullLoader)
+        self.cfg["basic"]["config_task"] = self.args.task
         for arg in vars(self.args):
             if getattr(self.args, arg) is not None:
                 if arg == "num_envs":
                     self.cfg["env"][arg] = getattr(self.args, arg)
+                elif arg == "task":
+                    continue
                 else:
                     self.cfg["basic"][arg] = getattr(self.args, arg)
         if not self.test:
@@ -152,7 +155,7 @@ class Runner:
             return
         if (self.cfg["basic"]["checkpoint"] == "-1") or (self.cfg["basic"]["checkpoint"] == -1):
             # Look for models in hierarchical structure: logs/robot_type/task_name/**/*.pth
-            task_name = self.cfg["basic"]["task"]
+            task_name = self.cfg["basic"].get("config_task", self.cfg["basic"]["task"])
             robot_type = self._get_robot_type(task_name)
             
             # First try: exact task in robot-specific folder
