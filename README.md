@@ -4,15 +4,23 @@ HTWK Gym is a reinforcement learning framework for humanoid locomotion built on 
 
 ## Sim2Sim Demo (MuJoCo)
 
-[![Sim2Sim Two-Policy Demo](demo_videos/sim2sim_two_policies.gif)](demo_videos/sim2sim_two_policies.mp4)
+[![Sim2Sim Two-Policy Demo](demo_videos/sim2sim_two_policies.gif)](demo_videos/sim2sim_two_policies.gif)
 
 The main demo above shows the optimized kicking policy in the MuJoCo sim2sim pipeline for improved robustness. The robot walks to a ball placed 1 meter away with `ParameterWalk`, switches to `Kicking` to strike it, and then continues moving forward. The labels below indicate the target ball angle relative to the robot.
 
 Ball angle setups at 1 meter distance:
 
-| 10 deg | 20 deg | 30 deg |
-| --- | --- | --- |
-| [![10 deg demo](demo_videos/demo_angle_10deg.gif)](demo_videos/demo_angle_10deg.gif) | [![20 deg demo](demo_angle_20.gif)](demo_angle_20.gif) | [![30 deg demo](demo_videos/demo_angle_30deg.gif)](demo_videos/demo_angle_30deg.gif) |
+**10 deg**
+
+[![10 degree ball angle at 1 meter](demo_videos/demo_angle_10.gif)](demo_videos/demo_angle_10.gif)
+
+**20 deg**
+
+[![20 degree ball angle at 1 meter](demo_videos/demo_angle_20.gif)](demo_videos/demo_angle_20.gif)
+
+**30 deg**
+
+[![30 degree ball angle at 1 meter](demo_videos/demo_angle_30.gif)](demo_videos/demo_angle_30.gif)
 
 <!-- ## Key Features
 
