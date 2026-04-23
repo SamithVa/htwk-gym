@@ -1,14 +1,20 @@
-<!-- # HTWK Gym
+# HTWK Gym
 
-HTWK Gym is an advanced reinforcement learning (RL) framework for humanoid robot locomotion, developed by [HTWK Robots](https://robots.htwk-leipzig.de/startseite). Built upon the foundation of [Booster Gym](https://github.com/BoosterRobotics/booster_gym/tree/main), HTWK Gym extends the original framework with significant enhancements for multi-robot support, advanced locomotion tasks, and improved research capabilities.
+HTWK Gym is a reinforcement learning framework for humanoid locomotion built on top of [Booster Gym](https://github.com/BoosterRobotics/booster_gym/tree/main). This repository currently focuses on training in Isaac Gym and sim2sim evaluation in MuJoCo for walking and ball-kicking behaviors.
 
-[![parameter_walk_on_real_T1](https://github.com/NaoHTWK/htwk-gym/blob/main/htwk_walk01.gif?raw=true)](https://github.com/NaoHTWK/htwk-gym/blob/main/htwk_walk01.gif?raw=true) -->
-
-## Sim2Sim Two-Policy Demo (MuJoCo)
+## Sim2Sim Demo (MuJoCo)
 
 [![Sim2Sim Two-Policy Demo](demo_videos/sim2sim_two_policies.gif)](demo_videos/sim2sim_two_policies.mp4)
 
-## Key Features
+The main demo above shows the optimized kicking policy in the MuJoCo sim2sim pipeline for improved robustness. The robot walks to a ball placed 1 meter away with `ParameterWalk`, switches to `Kicking` to strike it, and then continues moving forward. The labels below indicate the target ball angle relative to the robot.
+
+Ball angle setups at 1 meter distance:
+
+| 10 deg | 20 deg | 30 deg |
+| --- | --- | --- |
+| [![10 deg demo](demo_videos/demo_angle_10deg.gif)](demo_videos/demo_angle_10deg.gif) | [![20 deg demo](demo_angle_20.gif)](demo_angle_20.gif) | [![30 deg demo](demo_videos/demo_angle_30deg.gif)](demo_videos/demo_angle_30deg.gif) |
+
+<!-- ## Key Features
 
 - **Multi-Robot Platform Support**: Comprehensive support for both Booster T1 and K1 humanoid robots with specialized configurations
 - **Advanced Task Framework**: Sophisticated locomotion tasks including parameterized walking, ball-kicking behaviors, and adaptive gait control
@@ -40,11 +46,11 @@ HTWK Gym provides a comprehensive research platform for humanoid robot locomotio
     - **TensorFlow Lite Export**: Convert models to TensorFlow Lite format for mobile and embedded deployment with optional quantization
     - **Real-Time Robot Control**: Deploy policies directly to physical robots with live parameter adjustment
     - **Streamlit Observation Editor**: Web-based interface for real-time control of gait parameters during deployment
-    - **Pre-trained Model Library**: Ready-to-use trained policies for immediate testing and deployment
+    - **Pre-trained Model Library**: Ready-to-use trained policies for immediate testing and deployment -->
 
 ## Supported Robot Platforms & Tasks
 
-HTWK Gym supports multiple humanoid robot platforms with specialized task configurations:
+HTWK Gym currently supports the following training tasks:
 
 ### T1 Robot Platform
 
@@ -98,7 +104,7 @@ HTWK Gym supports multiple humanoid robot platforms with specialized task config
 
 ## Installation
 
-HTWK Gym uses Python virtual environments for flexible dependency management. Follow these steps to set up your environment:
+Set up the Isaac Gym training environment with:
 
 1. Create a virtual environment with Python 3.8:
 
@@ -131,19 +137,19 @@ HTWK Gym uses Python virtual environments for flexible dependency management. Fo
     $ pip install -r requirements.txt
     ```
 
-5. (Optional) Install TensorFlow Lite export dependencies:
+<!-- 5. (Optional) Install TensorFlow Lite export dependencies:
 
     ```sh
     $ pip install tensorflow==2.16.1 onnx onnx-tf
     ```
 
-    This enables TensorFlow Lite model export for mobile and embedded deployment.
+    This enables TensorFlow Lite model export for mobile and embedded deployment. -->
 
 ## Usage
 
-### 1. Training
+### 1. Training in Isaac Gym
 
-HTWK Gym supports multiple robot platforms and task types. To start training a policy:
+To start training a policy in Isaac Gym:
 
 ```sh
 $ python train.py --task=T1/BaseWalk
@@ -187,29 +193,7 @@ $ wandb login
 
 You can disable W&B tracking by setting `use_wandb` to `false` in the config file.
 
----
-
-### 2. Playing
-
-#### In-Simulation Testing
-
-To test the trained policy in Isaac Gym, run:
-
-```sh
-$ python play.py --task=T1/BaseWalk --checkpoint=-1
-```
-
-Videos of the evaluation are automatically saved in `videos/<date-time>.mp4`. You can disable video recording by setting `record_video` to `false` in the config file.
-
-#### Cross-Simulation Testing
-
-To test the policy in MuJoCo, run:
-
-```sh
-$ python play_mujoco.py --task=T1/BaseWalk --checkpoint=-1
-```
-
-#### Sim2Sim Two-Policy Rollout
+### 2. Sim2Sim in MuJoCo
 
 `sim2sim.py` runs a headless MuJoCo rollout for the T1 robot using two TorchScript policies:
 
@@ -247,11 +231,10 @@ $ python sim2sim.py --duration 12 --out demo_videos/sim2sim_two_policies.mp4
 By default, the rendered video is written to `videos/sim2sim_<timestamp>.mp4`.
 
 Demo preview: [sim2sim_two_policies.gif](demo_videos/sim2sim_two_policies.gif)  
-Full video: [sim2sim_two_policies.mp4](demo_videos/sim2sim_two_policies.mp4)
 
 ---
 
-### 3. Deployment
+<!-- ### 3. Deployment
 
 HTWK Gym supports multiple deployment formats for different target platforms:
 
@@ -369,37 +352,19 @@ HTWK Gym features a Streamlit-based observation editor for live parameter adjust
 - Configuration management and export capabilities
 
 For detailed usage instructions, see the [Deploy on Booster Robot](deploy/README.md) documentation.
+-->
 
 ## HTWK Gym Examples
 
-### Basic Walking
+### Training
 ```sh
 # Train basic walking on T1 robot
 $ python train.py --task=T1/BaseWalk --num_envs=4096
-
-# Test basic walking
-$ python play.py --task=T1/BaseWalk --checkpoint=-1
-```
-
-### Advanced Parameterized Walking
-```sh
-# Train parameterized walking with fine control
 $ python train.py --task=T1/ParameterWalk --num_envs=4096
-
-# Test parameterized walking
-$ python play.py --task=T1/ParameterWalk --checkpoint=-1
-```
-
-### Ball Kicking Behavior
-```sh
-# Train ball kicking behavior
 $ python train.py --task=T1/Kicking --num_envs=1024
-
-# Test ball kicking
-$ python play.py --task=T1/Kicking --checkpoint=-1
 ```
 
-### Sim2Sim Policy Switching
+### Sim2Sim
 ```sh
 # Export the latest walking and kicking policies to TorchScript
 $ python export_model.py --task=T1/ParameterWalk --checkpoint=-1
@@ -408,26 +373,6 @@ $ python export_model.py --task=T1/Kicking --checkpoint=-1
 # Run the MuJoCo two-policy sim2sim pipeline
 $ python sim2sim.py --duration 12
 ```
-
-### K1 Robot Platform
-```sh
-# Train K1 parameterized walking
-$ python train.py --task=K1/ParameterWalk --num_envs=4096
-
-# Test K1 walking
-$ python play.py --task=K1/ParameterWalk --checkpoint=-1
-```
-
-## Configuration Details
-
-Each task has its own configuration file with specific parameters:
-
-- **Observation Spaces**: Range from 44-54 dimensions depending on task complexity
-- **Action Spaces**: 12-dimensional for all tasks (3 DOF per leg × 4 legs)
-- **Command Spaces**: Vary from 0 (kicking) to 10 (parameterized walking) dimensions
-- **Reward Functions**: Task-specific reward structures optimized for different behaviors
-- **Terrain Types**: Support for both plane and trimesh terrains with randomization
-- **Domain Randomization**: Extensive parameter randomization for sim-to-real transfer
 
 ## Contributing to HTWK Gym
 
