@@ -1,13 +1,20 @@
-"""Headless MuJoCo sim2sim: walk to ball → kick → recover → walk."""
+"""MuJoCo sim2sim: walk to ball → kick → recover → walk.
+
+Run modes:
+  default          : opens MuJoCo GUI (interactive viewer)
+  --headless       : renders to video file via osmesa (no GUI)
+"""
 
 import argparse
 import glob
 import math
 import os
+import sys
 import time
 from dataclasses import dataclass, field
 
-os.environ.setdefault("MUJOCO_GL", "osmesa")
+if "--headless" in sys.argv:
+    os.environ.setdefault("MUJOCO_GL", "osmesa")
 
 import imageio.v2 as imageio
 import mujoco
@@ -30,9 +37,11 @@ MODE_KICK = "KICK"
 MODE_RECOVER = "RECOVER"
 MODE_FALLEN = "FALLEN"
 
+# Index in the deploy config's flat motor arrays where the 12 leg joints begin.
+# Deploy configs cover all 23 robot motors; leg joints occupy slots 11–22.
+DEPLOY_LEG_JOINT_OFFSET = 11
+
 RECOVER_STEPS = 30       # control steps to interpolate back to default pose
-KICK_SETTLE_STEPS = 25   # control steps kick policy runs after ball departs
-BALL_KICK_THRESHOLD = 0.15  # metres ball must move to count as kicked
 FALLEN_GRAVITY_Z = 0.5   # -proj_gravity[2] below this → fallen
 
 
@@ -41,8 +50,8 @@ class SimulationPaths:
     repo: str
     walk_ckpt: str
     kick_ckpt: str
-    walk_cfg: str
-    kick_cfg: str
+    walk_deploy_cfg: str
+    kick_deploy_cfg: str
     robot_xml: str
     out_path: str
 
@@ -65,6 +74,12 @@ class ModelMaps:
     ball_qpos_adr: int
     left_foot_body_id: int
     right_foot_body_id: int
+
+
+@dataclass
+class KickLogic:
+    ball_kick_threshold: float   # metres ball must move to count as kicked
+    kick_settle_steps: int       # control steps to hold kick policy after ball departs
 
 
 @dataclass
@@ -104,7 +119,7 @@ class EpisodeState:
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--walk-ckpt", type=str, default="logs/T1/T1/Parameter_Walk/2026-03-22-14-19-09/nn/model_20000.pt")
-    p.add_argument("--kick-ckpt", type=str, default=None)
+    p.add_argument("--kick-ckpt", type=str, default="logs/T1/T1/Kicking_Robust_44obs/2026-04-24-00-23-35/nn/model_7500.pt")
     p.add_argument("--ball-dist", type=float, default=1.0)
     p.add_argument("--ball-angle", type=float, default=0.0, help="Ball angle in degrees (0=ahead, positive=left)")
     p.add_argument("--switch-dist", type=float, default=0.4, help="Switch walk→kick distance [m]")
@@ -115,6 +130,12 @@ def parse_args():
     p.add_argument("--out", type=str, default=None)
     p.add_argument("--vx", type=float, default=0.4, help="Walk speed [m/s]")
     p.add_argument("--gait-freq", type=float, default=1.5)
+    p.add_argument("--walk-deploy-cfg", type=str, default=None, help="Path to walk deploy YAML (default: deploy/configs/Parameter_Walk.yaml)")
+    p.add_argument("--kick-deploy-cfg", type=str, default=None, help="Path to kick deploy YAML (default: deploy/configs/Kicking_Robust_44obs.yaml)")
+    p.add_argument("--headless", action="store_true", help="Render to video file (osmesa, no GUI)")
+    p.add_argument("--camera-dist", type=float, default=3.5, help="Camera distance from robot [m]")
+    p.add_argument("--camera-elev", type=float, default=-20, help="Camera elevation angle [deg]")
+    p.add_argument("--camera-azim", type=float, default=135, help="Camera azimuth angle [deg]")
     return p.parse_args()
 
 
@@ -150,22 +171,23 @@ def resolve_paths(args):
     walk_ckpt = args.walk_ckpt or find_latest_checkpoint(os.path.join(repo, "logs/T1/T1/Parameter_Walk/**/*.pt"))
     kick_ckpt = args.kick_ckpt or find_latest_checkpoint(os.path.join(repo, "logs/T1/T1/Kicking_Robust_44obs/**/*.pt"))
     out_path = args.out or os.path.join(repo, f"videos/sim2sim_{time.strftime('%Y%m%d_%H%M%S')}.mp4")
+    deploy_dir = os.path.join(repo, "deploy/configs")
     return SimulationPaths(
         repo=repo, walk_ckpt=walk_ckpt, kick_ckpt=kick_ckpt,
-        walk_cfg=os.path.join(repo, "envs/T1/Parameter_Walk.yaml"),
-        kick_cfg=os.path.join(repo, "envs/T1/Kicking_Robust_44obs.yaml"),
+        walk_deploy_cfg=args.walk_deploy_cfg or os.path.join(deploy_dir, "Parameter_Walk.yaml"),
+        kick_deploy_cfg=args.kick_deploy_cfg or os.path.join(deploy_dir, "Kicking_Robust_44obs.yaml"),
         robot_xml=os.path.join(repo, "resources/T1/T1_locomotion.xml"),
         out_path=out_path,
     )
 
 
-def build_control_params(walk_cfg, args):
-    sim_dt = walk_cfg["sim"]["dt"]
-    decimation = walk_cfg["control"]["decimation"]
+def build_control_params(walk_deploy_cfg, args):
+    sim_dt = walk_deploy_cfg["common"]["dt"]
+    decimation = walk_deploy_cfg["policy"]["control"]["decimation"]
     control_dt = sim_dt * decimation
     return ControlParams(
         sim_dt=sim_dt, decimation=decimation, control_dt=control_dt,
-        action_scale=walk_cfg["control"]["action_scale"],
+        action_scale=walk_deploy_cfg["policy"]["control"]["action_scale"],
         render_every=max(1, int(round(1.0 / (control_dt * args.fps)))),
         n_ctrl_steps=int(round(args.duration / control_dt)),
     )
@@ -228,29 +250,26 @@ def build_model_maps(model):
                      model.jnt_qposadr[ball_jadr], lf, rf)
 
 
-def build_default_joint_positions(cfg):
-    defaults = cfg["init_state"]["default_joint_angles"]
-    out = np.zeros(len(ISAAC_DOF_NAMES), dtype=np.float32)
-    for i, name in enumerate(ISAAC_DOF_NAMES):
-        for key, val in defaults.items():
-            if key != "default" and key in name:
-                out[i] = val
-                break
-        else:
-            out[i] = defaults["default"]
-    return out
+def build_default_joint_positions(deploy_cfg):
+    qpos = np.array(deploy_cfg["common"]["default_qpos"], dtype=np.float32)
+    return qpos[DEPLOY_LEG_JOINT_OFFSET:DEPLOY_LEG_JOINT_OFFSET + len(ISAAC_DOF_NAMES)]
 
 
-def build_joint_pd_gains(cfg):
-    kp = np.zeros(len(ISAAC_DOF_NAMES), dtype=np.float32)
-    kd = np.zeros(len(ISAAC_DOF_NAMES), dtype=np.float32)
-    for i, name in enumerate(ISAAC_DOF_NAMES):
-        for key in cfg["control"]["stiffness"]:
-            if key in name:
-                kp[i] = cfg["control"]["stiffness"][key]
-                kd[i] = cfg["control"]["damping"][key]
-                break
+def build_joint_pd_gains(deploy_cfg):
+    s = DEPLOY_LEG_JOINT_OFFSET
+    e = s + len(ISAAC_DOF_NAMES)
+    kp = np.array(deploy_cfg["common"]["stiffness"], dtype=np.float32)[s:e]
+    kd = np.array(deploy_cfg["common"]["damping"], dtype=np.float32)[s:e]
     return kp, kd
+
+
+def build_kick_logic(kick_deploy_cfg, control_dt):
+    kl = kick_deploy_cfg["kick_logic"]
+    settle_steps = max(1, int(round(kl["post_kick_hold_s"] / control_dt)))
+    return KickLogic(
+        ball_kick_threshold=kl["min_ball_travel_x"],
+        kick_settle_steps=settle_steps,
+    )
 
 
 def create_simulation(paths, args, sim_dt):
@@ -284,13 +303,15 @@ def initialize_episode(data, model, model_maps, default_joint_pos, args):
 
 
 def create_renderer_and_writer(model, args, out_path):
+    if not args.headless:
+        return None, None, None
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     renderer = mujoco.Renderer(model, height=args.height, width=args.width)
     camera = mujoco.MjvCamera()
     camera.type = mujoco.mjtCamera.mjCAMERA_FREE
-    camera.distance = 3.5
-    camera.elevation = -20
-    camera.azimuth = 135
+    camera.distance = args.camera_dist
+    camera.elevation = args.camera_elev
+    camera.azimuth = args.camera_azim
     writer = imageio.get_writer(out_path, fps=args.fps, codec="libx264", quality=8)
     return renderer, camera, writer
 
@@ -368,7 +389,7 @@ def apply_pd_control(model, data, model_maps, dof_target, kp, kd, decimation):
 
 
 def render_frame(step, render_every, data, renderer, camera, writer):
-    if step % render_every != 0:
+    if renderer is None or step % render_every != 0:
         return
     camera.lookat[:] = [data.qpos[0], data.qpos[1], 0.5]
     renderer.update_scene(data, camera=camera)
@@ -383,7 +404,8 @@ def log_progress(step, control_dt, state, mode):
 
 
 def run_episode(model, data, model_maps, policies, episode, control, args,
-                walk_norm, kick_norm, default_joint_pos, kp, kd, renderer, camera, writer):
+                walk_norm, kick_norm, kick_logic, default_joint_pos, kp, kd,
+                renderer, camera, writer, viewer=None):
     walk_cmd_scale = np.array([
         walk_norm["lin_vel"], walk_norm["lin_vel"], walk_norm["ang_vel"],
         walk_norm["gait_frequency"], walk_norm["foot_yaw"], walk_norm["foot_yaw"],
@@ -403,6 +425,8 @@ def run_episode(model, data, model_maps, policies, episode, control, args,
             if episode.mode == MODE_FALLEN:
                 data.ctrl[:] = 0.0
                 render_frame(step, control.render_every, data, renderer, camera, writer)
+                if viewer is not None:
+                    viewer.sync()
                 log_progress(step, control.control_dt, state, episode.mode)
                 mujoco.mj_step(model, data)
                 continue
@@ -414,8 +438,8 @@ def run_episode(model, data, model_maps, policies, episode, control, args,
 
             if episode.mode == MODE_KICK:
                 ball_moved = np.linalg.norm(state.ball_pos[:2] - episode.kick_ball_start[:2])
-                if ball_moved > BALL_KICK_THRESHOLD and episode.kick_settle_remaining == 0:
-                    episode.kick_settle_remaining = KICK_SETTLE_STEPS
+                if ball_moved > kick_logic.ball_kick_threshold and episode.kick_settle_remaining == 0:
+                    episode.kick_settle_remaining = kick_logic.kick_settle_steps
                     print(f"[t={step * control.control_dt:.2f}s] ball kicked ({ball_moved:.3f} m)")
                 if episode.kick_settle_remaining > 0:
                     episode.kick_settle_remaining -= 1
@@ -435,6 +459,8 @@ def run_episode(model, data, model_maps, policies, episode, control, args,
                 episode.last_ball_pos = state.ball_pos.copy()
                 apply_pd_control(model, data, model_maps, dof_target, kp, kd, control.decimation)
                 render_frame(step, control.render_every, data, renderer, camera, writer)
+                if viewer is not None:
+                    viewer.sync()
                 log_progress(step, control.control_dt, state, episode.mode)
                 continue
 
@@ -451,10 +477,14 @@ def run_episode(model, data, model_maps, policies, episode, control, args,
             dof_target = default_joint_pos + control.action_scale * episode.last_actions
             apply_pd_control(model, data, model_maps, dof_target, kp, kd, control.decimation)
             render_frame(step, control.render_every, data, renderer, camera, writer)
+            if viewer is not None:
+                viewer.sync()
             log_progress(step, control.control_dt, state, episode.mode)
     finally:
-        writer.close()
-        del renderer
+        if writer is not None:
+            writer.close()
+        if renderer is not None:
+            del renderer
 
     print(f"Done in {time.time() - start_time:.1f}s.")
     print(f"Final ball pos: {data.qpos[model_maps.ball_qpos_adr:model_maps.ball_qpos_adr + 3]}")
@@ -464,20 +494,31 @@ def run_episode(model, data, model_maps, policies, episode, control, args,
 def main():
     args = parse_args()
     paths = resolve_paths(args)
-    walk_cfg = load_yaml(paths.walk_cfg)
-    kick_cfg = load_yaml(paths.kick_cfg)
-    control = build_control_params(walk_cfg, args)
+    walk_deploy_cfg = load_yaml(paths.walk_deploy_cfg)
+    kick_deploy_cfg = load_yaml(paths.kick_deploy_cfg)
+    print(f"Walk deploy cfg: {paths.walk_deploy_cfg}")
+    print(f"Kick deploy cfg: {paths.kick_deploy_cfg}")
+    control = build_control_params(walk_deploy_cfg, args)
     policies = load_policies(paths)
     model, data, model_maps = create_simulation(paths, args, control.sim_dt)
-    default_joint_pos = build_default_joint_positions(walk_cfg)
-    kp, kd = build_joint_pd_gains(walk_cfg)
+    default_joint_pos = build_default_joint_positions(walk_deploy_cfg)
+    kp, kd = build_joint_pd_gains(walk_deploy_cfg)
+    kick_logic = build_kick_logic(kick_deploy_cfg, control.control_dt)
     episode = initialize_episode(data, model, model_maps, default_joint_pos, args)
     renderer, camera, writer = create_renderer_and_writer(model, args, paths.out_path)
-    print(f"Rendering to {paths.out_path} ({control.n_ctrl_steps} steps, render every {control.render_every})")
-    run_episode(model, data, model_maps, policies, episode, control, args,
-                walk_cfg["normalization"], kick_cfg["normalization"],
-                default_joint_pos, kp, kd, renderer, camera, writer)
-    print(f"Video: {paths.out_path}")
+    walk_norm = walk_deploy_cfg["policy"]["normalization"]
+    kick_norm = kick_deploy_cfg["policy"]["normalization"]
+    if args.headless:
+        print(f"Rendering to {paths.out_path} ({control.n_ctrl_steps} steps, render every {control.render_every})")
+        run_episode(model, data, model_maps, policies, episode, control, args,
+                    walk_norm, kick_norm, kick_logic, default_joint_pos, kp, kd,
+                    renderer, camera, writer)
+        print(f"Video: {paths.out_path}")
+    else:
+        with mujoco.viewer.launch_passive(model, data) as viewer:
+            run_episode(model, data, model_maps, policies, episode, control, args,
+                        walk_norm, kick_norm, kick_logic, default_joint_pos, kp, kd,
+                        None, None, None, viewer=viewer)
 
 
 if __name__ == "__main__":
