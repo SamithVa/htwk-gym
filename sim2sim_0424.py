@@ -119,8 +119,8 @@ class EpisodeState:
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--walk-ckpt", type=str, default="deploy/models/kicking.pt")
-    p.add_argument("--kick-ckpt", type=str, default="deploy/models/param_walk.pt")
+    p.add_argument("--walk-ckpt", type=str, default="deploy/models/param_walk.pt")
+    p.add_argument("--kick-ckpt", type=str, default="deploy/models/kicking.pt")
     p.add_argument("--ball-dist", type=float, default=1.0)
     p.add_argument("--ball-angle", type=float, default=0.0, help="Ball angle in degrees (0=ahead, positive=left)")
     p.add_argument("--switch-dist", type=float, default=0.4, help="Switch walk→kick distance [m]")
