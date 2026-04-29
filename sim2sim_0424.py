@@ -18,6 +18,7 @@ if "--headless" in sys.argv:
 
 import imageio.v2 as imageio
 import mujoco
+import mujoco.viewer
 import numpy as np
 import torch
 import yaml
@@ -118,8 +119,8 @@ class EpisodeState:
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--walk-ckpt", type=str, default="logs/T1/T1/Parameter_Walk/2026-03-22-14-19-09/nn/model_20000.pt")
-    p.add_argument("--kick-ckpt", type=str, default="logs/T1/T1/Kicking_Robust_44obs/2026-04-24-00-23-35/nn/model_7500.pt")
+    p.add_argument("--walk-ckpt", type=str, default="deploy/models/kicking.pt")
+    p.add_argument("--kick-ckpt", type=str, default="deploy/models/param_walk.pt")
     p.add_argument("--ball-dist", type=float, default=1.0)
     p.add_argument("--ball-angle", type=float, default=0.0, help="Ball angle in degrees (0=ahead, positive=left)")
     p.add_argument("--switch-dist", type=float, default=0.4, help="Switch walk→kick distance [m]")
