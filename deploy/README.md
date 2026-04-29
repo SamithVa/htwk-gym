@@ -65,3 +65,45 @@ Follow these steps to set up your environment and deploy a policy on the robot:
   Always enter/exit PREP Mode carefully and check surroundings before starting motion.
 
 ---
+
+## Sim2Sim (MuJoCo)
+
+Test policies in MuJoCo before deploying to hardware.
+
+**Requirements:** MuJoCo 3+, `multi-agent` conda env, osmesa (headless only).
+
+**Model files** (place in `deploy/models/`):
+- `param_walk.pt` — parameterized walk policy
+- `kicking.pt` — kicking policy
+
+**Config files** (in `deploy/configs/`):
+- `Parameter_Walk.yaml` — walk gains, normalization, gait params
+- `Kicking_Robust_44obs.yaml` — kick gains, normalization, kick logic
+
+**Run (GUI):**
+```sh
+conda activate multi-agent
+python sim2sim.py
+```
+
+**Run (headless → video file):**
+```sh
+conda activate multi-agent
+python sim2sim.py --headless --out videos/out.mp4
+```
+
+**Key arguments:**
+
+| Argument | Default | Description |
+|---|---|---|
+| `--walk-ckpt` | `deploy/models/param_walk.pt` | Walk policy checkpoint |
+| `--kick-ckpt` | `deploy/models/kicking.pt` | Kick policy checkpoint |
+| `--ball-dist` | `1.0` | Initial ball distance [m] |
+| `--ball-angle` | `0.0` | Ball angle [deg], 0=ahead, +ve=left |
+| `--switch-dist` | `0.4` | Walk→kick switch distance [m] |
+| `--vx` | `0.3` | Walk approach speed [m/s] |
+| `--duration` | `10.0` | Episode duration [s] |
+| `--headless` | off | Render to video instead of GUI |
+| `--out` | auto-timestamped | Output video path |
+
+---
