@@ -42,7 +42,7 @@ MODE_FALLEN = "FALLEN"
 DEPLOY_LEG_JOINT_OFFSET = 11
 
 RECOVER_STEPS = 30       # control steps to interpolate back to default pose
-FALLEN_GRAVITY_Z = 0.5   # -proj_gravity[2] below this → fallen
+FALLEN_GRAVITY_Z = 0.3   # -proj_gravity[2] below this → fallen
 
 
 @dataclass

@@ -5,3 +5,6 @@ logs/
 __pycache__/
 
 *temp/
+
+sim2sim/
+

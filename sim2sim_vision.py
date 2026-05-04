@@ -39,6 +39,8 @@ MODE_KICK    = "KICK"
 MODE_RECOVER = "RECOVER"
 MODE_FALLEN  = "FALLEN"
 
+DEPLOY_LEG_JOINT_OFFSET = 11  # leg joints occupy slots 11-22 in the 23-motor deploy arrays
+
 KICK_BALL_THRESHOLD = 0.05  # m — ball must travel this far from kick-start to count as kicked
 KICK_SETTLE_STEPS   = 10   # control steps to hold kick policy after ball departs
 RECOVER_STEPS       = 30   # control steps to interpolate back to default pose
@@ -241,30 +243,15 @@ def build_model_maps(model):
     )
 
 
-def build_defaults(cfg):
-    defaults = cfg["init_state"]["default_joint_angles"]
-    out = np.zeros(len(ISAAC_DOF_NAMES), dtype=np.float32)
-    for i, name in enumerate(ISAAC_DOF_NAMES):
-        for key, val in defaults.items():
-            if key != "default" and key in name:
-                out[i] = val
-                break
-        else:
-            out[i] = defaults["default"]
-    return out
+def build_defaults(deploy_cfg):
+    qpos = np.array(deploy_cfg["common"]["default_qpos"], dtype=np.float32)
+    return qpos[DEPLOY_LEG_JOINT_OFFSET:DEPLOY_LEG_JOINT_OFFSET + len(ISAAC_DOF_NAMES)]
 
 
-def build_pd_gains(cfg):
-    stiff = cfg["control"]["stiffness"]
-    damp  = cfg["control"]["damping"]
-    kp = np.zeros(len(ISAAC_DOF_NAMES), dtype=np.float32)
-    kd = np.zeros(len(ISAAC_DOF_NAMES), dtype=np.float32)
-    for i, name in enumerate(ISAAC_DOF_NAMES):
-        for key in stiff:
-            if key in name:
-                kp[i] = stiff[key]
-                kd[i] = damp[key]
-                break
+def build_pd_gains(deploy_cfg):
+    s, e = DEPLOY_LEG_JOINT_OFFSET, DEPLOY_LEG_JOINT_OFFSET + len(ISAAC_DOF_NAMES)
+    kp = np.array(deploy_cfg["common"]["stiffness"], dtype=np.float32)[s:e]
+    kd = np.array(deploy_cfg["common"]["damping"], dtype=np.float32)[s:e]
     return kp, kd
 
 
@@ -588,8 +575,12 @@ def run_episode(model, data, mm, policies, episode, cp, args,
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--walk-ckpt",     type=str,   default="deploy/models/param_walk.pt")
-    p.add_argument("--kick-ckpt",     type=str,   default="deploy/models/kicking.pt")
+    p.add_argument("--walk-ckpt",       type=str, default="deploy/models/param_walk.pt")
+    p.add_argument("--kick-ckpt",       type=str, default="deploy/models/kicking.pt")
+    p.add_argument("--walk-deploy-cfg", type=str, default="deploy/configs/Parameter_Walk.yaml",
+                   help="Path to walk deploy YAML")
+    p.add_argument("--kick-deploy-cfg", type=str, default="deploy/configs/Kicking_Robust_44obs.yaml",
+                   help="Path to kick deploy YAML")
     p.add_argument("--ball-dist",     type=float, default=1.0,  help="Ball distance from robot [m]")
     p.add_argument("--switch-dist",   type=float, default=0.4,  help="Distance to switch to kick [m]")
     p.add_argument("--slowdown-dist", type=float, default=0.6,  help="Distance to start slowing [m]")
@@ -629,18 +620,20 @@ def main():
         repo, f"videos/sim2sim_vision_{time.strftime('%Y%m%d_%H%M%S')}.mp4")
     print(f"Walk: {walk_ckpt}\nKick: {kick_ckpt}")
 
-    walk_cfg  = load_yaml(os.path.join(repo, "envs/T1/Parameter_Walk.yaml"))
-    kick_cfg  = load_yaml(os.path.join(repo, "envs/T1/Kicking_Robust.yaml"))
-    walk_norm = walk_cfg["normalization"]
-    kick_norm = kick_cfg["normalization"]
+    walk_cfg  = load_yaml(args.walk_deploy_cfg)
+    kick_cfg  = load_yaml(args.kick_deploy_cfg)
+    print(f"Walk deploy cfg: {args.walk_deploy_cfg}")
+    print(f"Kick deploy cfg: {args.kick_deploy_cfg}")
+    walk_norm = walk_cfg["policy"]["normalization"]
+    kick_norm = kick_cfg["policy"]["normalization"]
 
-    sim_dt     = walk_cfg["sim"]["dt"]
-    decimation = walk_cfg["control"]["decimation"]
+    sim_dt     = walk_cfg["common"]["dt"]
+    decimation = walk_cfg["policy"]["control"]["decimation"]
     cp = ControlParams(
         sim_dt=sim_dt,
         decimation=decimation,
         control_dt=sim_dt * decimation,
-        action_scale=walk_cfg["control"]["action_scale"],
+        action_scale=walk_cfg["policy"]["control"]["action_scale"],
         n_steps=int(round(args.duration / (sim_dt * decimation))),
         render_every=max(1, int(round(1.0 / (sim_dt * decimation * args.fps)))),
     )
@@ -667,8 +660,8 @@ def main():
 
     default_dof_pos = build_defaults(walk_cfg)
     kp, kd          = build_pd_gains(walk_cfg)
-    head_kp_walk    = float(walk_cfg["control"]["head_kp_walk"])
-    head_kd_walk    = float(walk_cfg["control"]["head_kd_walk"])
+    head_kp_walk    = float(walk_cfg["policy"]["control"]["head_kp_walk"])
+    head_kd_walk    = float(walk_cfg["policy"]["control"]["head_kd_walk"])
     cam_id           = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, "head_cam")
     intrinsics       = build_cam_intrinsics(model, cam_id)
 
