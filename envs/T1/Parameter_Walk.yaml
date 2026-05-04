@@ -94,6 +94,8 @@ control:
   damping:   {"Hip":   5.0, "Knee":   5.0, "Ankle":  1.0}
   action_scale: 1.
   decimation: 10
+  head_kp_walk: 2.0    # head joint stiffness during walk (sim2sim only)
+  head_kd_walk: 1.0    # head joint damping  during walk (sim2sim only)
 
 terrain:
   type: "trimesh" # "plane" or "trimesh"

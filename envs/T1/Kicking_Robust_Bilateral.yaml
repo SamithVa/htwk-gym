@@ -1,13 +1,13 @@
 basic:
   checkpoint: null # set to -1 to load last saved model
   headless: false
-  max_iterations: 10000 # set the maximum number of learning iterations to train for
+  max_iterations: 20000 # set the maximum number of learning iterations to train for
   sim_device: "cpu" # device for physics simulation
   rl_device: "cpu" # device for the RL algorithm
   seed: -1 # seed - set to -1 to choose random seed
   description: ""
   enable_csv_logging: false
-  task: "T1/Kicking_Robust_44obs"
+  task: "T1/Kicking_Robust_Bilateral"
 
 env:
   num_envs: 1
@@ -196,7 +196,7 @@ noise:
 
 randomization:
   init_dof_pos:
-    range: [0., 0.05]
+    range: [0., 0.20]
     operation: "additive"
     distribution: "gaussian"
   init_base_pos_xy:
@@ -204,13 +204,21 @@ randomization:
     operation: "additive"
     distribution: "uniform"
   init_base_lin_vel_xy:
-    range: [0., 0.1]
+    range: [0., 0.5]
     operation: "additive"
     distribution: "gaussian"
   init_base_ang:
-    range: [-0.1, 0.1]
+    range: [-0.4, 0.4]
     operation: "additive"
     distribution: "gaussian"
+  init_base_ang_vel:
+    range: [0., 0.3]
+    operation: "additive"
+    distribution: "gaussian"
+  init_base_pitch:
+    range: [-0.08, 0.08]
+    operation: "additive"
+    distribution: "uniform"
 
   # ball_init_pos_x and ball_init_pos_y replaced by polar sampling below
   ball_init_angle_min: -0.785   # radians (-45 deg)
@@ -288,8 +296,8 @@ rewards:
     tracking_lin_vel_x: 1.0
     tracking_lin_vel_y: 1.0
     tracking_ang_vel: 0.5
-    base_height: -150.
-    orientation: -15.
+    base_height: -200.
+    orientation: -20.
     torques: -2.e-4
     torque_tiredness: -1.e-2
     power: -2.e-3
@@ -310,17 +318,17 @@ rewards:
     body_angle: 0.15
     ball_acceleration: 0.5
     waiting: -0.5
-    post_kick_stability: 0.01  # nonzero so function is registered; self-gated pre-kick
+    post_kick_stability: 0.5
     kick_foot_velocity_penalty: -0.5  # penalty for excessive foot speed before kick
-    post_kick_return_to_default: 0.01  # nonzero so function is registered; self-gated pre-kick
+    post_kick_return_to_default: 0.3
   ball_rolling_scale:
     waiting: 0.0
     survival: 0.5
     tracking_lin_vel_x: 2.0
     tracking_lin_vel_y: 2.0
     tracking_ang_vel: 1.0
-    base_height: -220.
-    orientation: -30.
+    base_height: -280.
+    orientation: -40.
     action_rate: -2.0
     feet_slip: -2.0
     body_angle: 0.4
@@ -328,9 +336,9 @@ rewards:
     kicking_foot_approach_ball_stationary: 0.0
     body_alignment_for_kick: 0.0
     ball_acceleration: 0.0
-    post_kick_stability: 10.0
+    post_kick_stability: 15.0
     kick_foot_velocity_penalty: 0.0  # off post-kick
-    post_kick_return_to_default: 5.0
+    post_kick_return_to_default: 8.0
     ang_vel_xy: -0.5
     lin_vel_z: -3.0
 
@@ -376,7 +384,7 @@ rewards:
   kick_detection_speed_increase_threshold: 0.5 # Min ball speed increase (m/s) to detect a kick
   min_kick_forward_speed: 0.6
   min_ball_travel_x: 0.45
-  kick_timeout_s: 3.0
+  kick_timeout_s: 4.5
   post_kick_hold_s: 0.35
   post_kick_default_pose_sigma_sq: 1.0  # rad^2 — controls how tightly default pose is required post-kick
   post_kick_max_base_lin_vel: 0.45

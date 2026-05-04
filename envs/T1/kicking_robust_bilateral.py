@@ -1,5 +1,5 @@
 from isaacgym import gymtorch, gymapi
-from isaacgym.torch_utils import get_euler_xyz, quat_rotate, quat_rotate_inverse, to_torch
+from isaacgym.torch_utils import get_euler_xyz, quat_from_euler_xyz, quat_mul, quat_rotate, quat_rotate_inverse, to_torch
 
 assert gymtorch
 
@@ -27,6 +27,29 @@ class KickingRobustBilateral(BaseKicking):
         self.time_since_kick_buf[env_ids] = 0.0
         self.stable_hold_time_buf[env_ids] = 0.0
         self.kick_ball_start_x_buf[env_ids] = self.root_states[env_ids, 1, 0]
+        # Start at a random point in the gait cycle to match walking-transition conditions
+        self.gait_process[env_ids] = torch.rand(len(env_ids), device=self.device)
+
+    def _reset_root_states(self, env_ids):
+        super()._reset_root_states(env_ids)
+        if len(env_ids) == 0:
+            return
+        n = len(env_ids)
+        # Add small pitch/roll perturbation on top of the parent's yaw randomization
+        # to simulate body sway when transitioning from a walking policy.
+        pitch_cfg = self.cfg["randomization"].get("init_base_pitch")
+        if pitch_cfg is not None:
+            pitch = apply_randomization(torch.zeros(n, device=self.device), pitch_cfg)
+            roll  = apply_randomization(torch.zeros(n, device=self.device), pitch_cfg)
+            perturb_quat = quat_from_euler_xyz(roll, pitch, torch.zeros(n, device=self.device))
+            current_quat = self.root_states[env_ids, 0, 3:7].clone()
+            self.root_states[env_ids, 0, 3:7] = quat_mul(current_quat, perturb_quat)
+        # Add initial angular velocity to simulate the robot turning during walk
+        ang_vel_cfg = self.cfg["randomization"].get("init_base_ang_vel")
+        if ang_vel_cfg is not None:
+            self.root_states[env_ids, 0, 10:13] = apply_randomization(
+                torch.zeros(n, 3, device=self.device), ang_vel_cfg
+            )
 
     def _reset_ball_at_robot_front(self, env_ids_to_reset_ball):
         if len(env_ids_to_reset_ball) == 0:
