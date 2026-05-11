@@ -6,5 +6,10 @@ __pycache__/
 
 *temp/
 
-sim2sim/
+# sim2sim/
 
+# codex
+.codex
+.vscode/
+
+cam_frames/

@@ -43,7 +43,7 @@ DEPLOY_LEG_JOINT_OFFSET = 11  # leg joints occupy slots 11-22 in the 23-motor de
 
 KICK_BALL_THRESHOLD = 0.05  # m — ball must travel this far from kick-start to count as kicked
 KICK_SETTLE_STEPS   = 10   # control steps to hold kick policy after ball departs
-RECOVER_STEPS       = 30   # control steps to interpolate back to default pose
+RECOVER_STEPS       = 10   # control steps to interpolate back to default pose
 FALLEN_GRAVITY_Z    = 0.3  # -proj_gravity[2] below this → robot is fallen (overridable via --fallen-thresh)
 
 # Head camera
@@ -61,6 +61,7 @@ HEAD_TARGET_ALPHA = 0.3   # EMA smoothing factor for head targets
 HEAD_SEARCH_AMP   = 0.0   # rad — yaw sweep amplitude
 HEAD_SEARCH_PITCH = -0.2  # rad — tilt head up while searching (negative = look up)
 HEAD_SEARCH_SPEED = 0.15  # rad/s — sweep rate
+
 
 
 # ── Dataclasses ────────────────────────────────────────────────────────────────
@@ -88,6 +89,7 @@ class ModelMaps:
     head_pitch_qvel_adr: int
     head_yaw_ctrl_id: int
     head_pitch_ctrl_id: int
+    base_body_id: int
 
 
 @dataclass
@@ -230,6 +232,15 @@ def build_model_maps(model):
     yaw_jid   = _jnt("AAHead_yaw")
     pitch_jid = _jnt("Head_pitch")
 
+    # Find robot base body: the first body (after world=0) whose joint is a free joint
+    base_body_id = 1  # fallback: root body is almost always index 1
+    for bid in range(1, model.nbody):
+        if model.body_jntnum[bid] > 0:
+            jid = model.body_jntadr[bid]
+            if model.jnt_type[jid] == mujoco.mjtJoint.mjJNT_FREE:
+                base_body_id = bid
+                break
+
     return ModelMaps(
         qpos_idx=qpos_idx, qvel_idx=qvel_idx, actuator_idx=actuator_idx,
         ball_qpos_adr=model.jnt_qposadr[ball_jadr],
@@ -240,6 +251,7 @@ def build_model_maps(model):
         head_pitch_qvel_adr=model.jnt_dofadr[pitch_jid],
         head_yaw_ctrl_id=_act("AAHead_yaw"),
         head_pitch_ctrl_id=_act("Head_pitch"),
+        base_body_id=base_body_id,
     )
 
 
@@ -285,7 +297,8 @@ def read_state(data, mm):
 def detect_ball(rgb):
     """Detect the red ball by colour thresholding.
 
-    Returns (u, v, (x0, y0, x1, y1)) — pixel centroid and tight bounding box — or None.
+    Returns (u, v, (x0, y0, x1, y1), mask) — pixel centroid, tight bounding box, and
+    boolean mask — or None.
     """
     mask = (rgb[:, :, 0] > 200) & (rgb[:, :, 1] < 100) & (rgb[:, :, 2] < 100)
     if np.count_nonzero(mask) < MIN_BALL_PIXELS:
@@ -294,21 +307,49 @@ def detect_ball(rgb):
     u   = float(xs.mean())
     v   = float(ys.mean())
     bbox = (int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max()))
-    return u, v, bbox
+    return u, v, bbox, mask
 
 
-def estimate_ball_world(data, cam_id, u, v, depth_renderer, intrinsics):
-    """Back-project pixel (u, v) + depth to a world-frame ball centre.
+def backproject_ball(cam_id, u, v, intrinsics, depth_raw, data):
+    """Back-project pixel (u,v) + pre-rendered depth to ball position in camera frame.
 
-    Returns float32 (3,) or None if depth is invalid.
+    Returns (p_cam float32(3), d float) or (None, None) if depth is invalid.
+    p_cam follows standard pinhole convention: Z=-d (forward), X=right, Y=up.
     """
     fx, fy, cx, cy = intrinsics
-    depth_renderer.update_scene(data, camera=cam_id)
-    d = float(depth_renderer.render()[int(round(v)), int(round(u))])
+    d = float(depth_raw[int(round(v)), int(round(u))])
     if d <= 0.0 or d > MAX_BALL_DEPTH:
-        return None
-    p_cam     = np.array([(u - cx) * d / fx, -(v - cy) * d / fy, -d])
-    R_world   = data.cam_xmat[cam_id].reshape(3, 3)
+        return None, None
+    p_cam = np.array([(u - cx) * d / fx, -(v - cy) * d / fy, -d], dtype=np.float32)
+    return p_cam, d
+
+
+def ball_dist_in_base_frame(data, mm, cam_id, p_cam):
+    """Compute XY distance from robot base to ball using FK only.
+
+    Uses MuJoCo's already-computed body/camera poses (derived from joint states +
+    fixed geometry — equivalent to URDF FK in real deployment, no world position needed).
+    The absolute world positions of base and camera cancel; only their relative transform
+    and the camera-frame measurement matter.
+    """
+    R_world_base = data.xmat[mm.base_body_id].reshape(3, 3)
+    R_world_cam  = data.cam_xmat[cam_id].reshape(3, 3)
+    t_world_base = data.xpos[mm.base_body_id]
+    t_world_cam  = data.cam_xpos[cam_id]
+
+    # Ball in base frame (world positions cancel — equivalent to pure FK transform)
+    ball_in_base = R_world_base.T @ (R_world_cam @ p_cam + (t_world_cam - t_world_base))
+    return float(np.linalg.norm(ball_in_base[:2]))
+
+
+def estimate_ball_world(data, cam_id, p_cam):
+    """Convert camera-frame ball position to world frame (for kick policy).
+
+    Camera pose comes from FK (joint states + geometry), achievable via robot's own
+    odometry/kinematics — does not require absolute world localisation.
+    Returns float32 (3,).
+    """
+    R_world = data.cam_xmat[cam_id].reshape(3, 3)
     ray_world = R_world @ (p_cam / np.linalg.norm(p_cam))
     return (data.cam_xpos[cam_id] + R_world @ p_cam + BALL_RADIUS * ray_world).astype(np.float32)
 
@@ -338,44 +379,45 @@ def apply_head_control(data, mm, episode, control_dt, detection,
     reaction torques on the base — the kick policy was trained without head joints.
     Pass active_during_kick=True to keep stiff PD active (useful for comparison runs).
     """
+    kp, kd = head_kp_walk, head_kd_walk
+
+    # Head yaw is kinematically locked in apply_pd — no motor control needed here
+    data.ctrl[mm.head_yaw_ctrl_id] = 0.0
+
+    # Pitch: zero torque during kick/recover (avoid disturbing kick policy)
     if episode.mode in (MODE_KICK, MODE_RECOVER) and not active_during_kick:
-        data.ctrl[mm.head_yaw_ctrl_id]   = 0.0
         data.ctrl[mm.head_pitch_ctrl_id] = 0.0
         return
-    else:
-        kp, kd = head_kp_walk, head_kd_walk
-        episode.head_yaw_target = 0.0  # yaw is always fixed at centre
-        if detection is not None:
-            _, v, _ = detection
-            # Only pitch adjusts (via EMA) to keep ball vertically centered
-            desired_pitch = episode.head_pitch_target + HEAD_PITCH_GAIN * (v - CAM_H / 2.0) / (CAM_H / 2.0)
-            episode.head_pitch_target += HEAD_TARGET_ALPHA * (desired_pitch - episode.head_pitch_target)
-        else:
-            # Tilt head up while searching
-            desired_pitch = HEAD_SEARCH_PITCH
-            episode.head_pitch_target += HEAD_TARGET_ALPHA * (desired_pitch - episode.head_pitch_target)
-    episode.head_yaw_target   = float(np.clip(episode.head_yaw_target,   -1.57, 1.57))
-    episode.head_pitch_target = float(np.clip(episode.head_pitch_target, -0.35, 1.22))
 
-    for qpos_adr, qvel_adr, ctrl_id, target in (
-        (mm.head_yaw_qpos_adr,   mm.head_yaw_qvel_adr,   mm.head_yaw_ctrl_id,   episode.head_yaw_target),
-        (mm.head_pitch_qpos_adr, mm.head_pitch_qvel_adr, mm.head_pitch_ctrl_id, episode.head_pitch_target),
-    ):
-        tau = float(np.clip(kp * (target - data.qpos[qpos_adr]) - kd * data.qvel[qvel_adr], -7.0, 7.0))
-        data.ctrl[ctrl_id] = tau
+    if detection is not None:
+        _, v, *_ = detection
+        desired_pitch = episode.head_pitch_target + HEAD_PITCH_GAIN * (v - CAM_H / 2.0) / (CAM_H / 2.0)
+    else:
+        desired_pitch = HEAD_SEARCH_PITCH
+
+    episode.head_pitch_target += HEAD_TARGET_ALPHA * (desired_pitch - episode.head_pitch_target)
+    episode.head_pitch_target  = float(np.clip(episode.head_pitch_target, -0.35, 1.22))
+    tau_pitch = float(np.clip(
+        kp * (episode.head_pitch_target - data.qpos[mm.head_pitch_qpos_adr])
+        - kd * data.qvel[mm.head_pitch_qvel_adr],
+        -7.0, 7.0,
+    ))
+    data.ctrl[mm.head_pitch_ctrl_id] = tau_pitch
 
 
 # ── Observations ───────────────────────────────────────────────────────────────
 
-def build_walk_obs(state, episode, control_dt, args, default_dof_pos, walk_norm, cmd_scale, detection=None):
+def build_walk_obs(state, episode, control_dt, args, default_dof_pos, walk_norm, cmd_scale,
+                   detection=None, vision_dist=None):
     """Walk observation: speed ramps down as robot nears ball; yaw rate steers toward ball."""
+    dist  = vision_dist if vision_dist is not None else state.dist_xy
     span  = max(args.slowdown_dist - args.switch_dist, 1e-6)
-    scale = float(np.clip((state.dist_xy - args.switch_dist) / span, 0.0, 1.0))
-    vx    = args.vx * scale
+    scale = float(np.clip((dist - args.switch_dist) / span, 0.0, 1.0))
+    vx    = max(args.vx * scale, args.vx_min)  # floor keeps robot moving until KICK triggers
     gf    = args.gait_freq * max(0.5, scale)
 
     if detection is not None:
-        u, _, _ = detection
+        u, *_ = detection
         # Ball right of centre (u > CAM_W/2) → turn right (negative yaw rate)
         yaw_rate = float(np.clip(-1.5 * (u - CAM_W / 2.0) / (CAM_W / 2.0), -1.5, 1.5))
     else:
@@ -431,6 +473,9 @@ def apply_pd(model, data, mm, target, kp, kd, decimation):
         data.ctrl[mm.actuator_idx] = np.clip(kp * (target - q) - kd * dq,
                                              ctrl_range[:, 0], ctrl_range[:, 1])
         mujoco.mj_step(model, data)
+        # Hard-lock head yaw: reset state after every physics step
+        data.qpos[mm.head_yaw_qpos_adr] = 0.0
+        data.qvel[mm.head_yaw_qvel_adr] = 0.0
 
 
 # ── Rendering ──────────────────────────────────────────────────────────────────
@@ -487,20 +532,43 @@ def run_episode(model, data, mm, policies, episode, cp, args,
         detection = detect_ball(head_rgb)
         head_rgb_annotated = draw_bbox(head_rgb, detection[2]) if detection is not None else head_rgb
 
-        # ── Save head-camera image when ball is detected ──────────────────────
+        # ── Depth at ball pixel → vision-based XY distance in base frame ────────
+        depth_raw   = None
+        vision_dist = None
+        ball_p_cam  = None
+        if detection is not None:
+            head_renderer_depth.update_scene(data, camera=cam_id)
+            depth_raw = head_renderer_depth.render()
+            ball_p_cam, _ = backproject_ball(cam_id, detection[0], detection[1],
+                                             intrinsics, depth_raw, data)
+            if ball_p_cam is not None:
+                # XY distance in robot base frame — FK only, no world position needed
+                vision_dist = ball_dist_in_base_frame(data, mm, cam_id, ball_p_cam)
+
+        # ── Save head-camera images when ball is detected ─────────────────────
         if cam_save_dir and detection is not None:
             if detection_save_count % args.cam_save_every == 0:
-                fname = os.path.join(cam_save_dir, f"cam_{step:05d}_t{t:.3f}s.png")
-                imageio.imwrite(fname, head_rgb_annotated)
+                prefix = os.path.join(cam_save_dir, f"cam_{step:05d}_t{t:.3f}s")
+                # RGB with bounding box
+                imageio.imwrite(f"{prefix}_rgb.png", head_rgb_annotated)
+                # Binary mask (white = detected ball pixels)
+                mask_img = (detection[3].astype(np.uint8) * 255)
+                imageio.imwrite(f"{prefix}_mask.png", mask_img)
+                # Depth: grayscale — bright=close, dark=far, black=no-return
+                depth_img = np.clip(depth_raw / MAX_BALL_DEPTH, 0.0, 1.0)
+                depth_img = ((1.0 - depth_img) * 255).astype(np.uint8)
+                depth_img[depth_raw <= 0.0] = 0
+                imageio.imwrite(f"{prefix}_depth.png", depth_img)
             detection_save_count += 1
 
         # ── Mode transitions (plain `if` blocks like sim2sim.py so RECOVER can
         #    run on the same step as KICK→RECOVER) ──────────────────────────────
-        if episode.mode == MODE_WALK and state.dist_xy <= args.switch_dist:
+        effective_dist = vision_dist if vision_dist is not None else state.dist_xy
+        if episode.mode == MODE_WALK and effective_dist <= args.switch_dist:
             episode.mode = MODE_KICK
             episode.kick_ball_start = state.ball_pos.copy()
             episode.kick_settle_remaining = 0
-            print(f"[t={t:.2f}s] WALK → KICK  dist={state.dist_xy:.3f}")
+            print(f"[t={t:.2f}s] WALK → KICK  dist={effective_dist:.3f} (vision={vision_dist is not None})")
 
         if episode.mode == MODE_KICK:
             ball_moved = np.linalg.norm(state.ball_pos[:2] - episode.kick_ball_start[:2])
@@ -543,7 +611,8 @@ def run_episode(model, data, mm, policies, episode, cp, args,
 
         if episode.mode == MODE_WALK:
             obs, clip = build_walk_obs(state, episode, cp.control_dt, args,
-                                       default_dof_pos, walk_norm, cmd_scale, detection=detection)
+                                       default_dof_pos, walk_norm, cmd_scale,
+                                       detection=detection, vision_dist=vision_dist)
             episode.last_actions = infer(policies.walk, obs, clip)
 
         else:  # MODE_KICK — ball still on ground, estimate position from vision or GT
@@ -551,17 +620,13 @@ def run_episode(model, data, mm, policies, episode, cp, args,
 
             if args.use_gt_ball:
                 ball_pos = state.ball_pos
-            elif detection is not None:
-                est = estimate_ball_world(data, cam_id, detection[0], detection[1],
-                                          head_renderer_depth, intrinsics)
-                if est is not None:
-                    err = np.linalg.norm(est - state.ball_pos)
-                    print(f"  [t={t:.2f}s] vision=({est[0]:.3f},{est[1]:.3f},{est[2]:.3f})"
-                          f"  gt=({state.ball_pos[0]:.3f},{state.ball_pos[1]:.3f},{state.ball_pos[2]:.3f})"
-                          f"  err={err:.4f}m")
-                    ball_pos = est
-                else:
-                    ball_pos = state.ball_pos
+            elif ball_p_cam is not None:
+                est = estimate_ball_world(data, cam_id, ball_p_cam)
+                err = np.linalg.norm(est - state.ball_pos)
+                print(f"  [t={t:.2f}s] vision=({est[0]:.3f},{est[1]:.3f},{est[2]:.3f})"
+                      f"  gt=({state.ball_pos[0]:.3f},{state.ball_pos[1]:.3f},{state.ball_pos[2]:.3f})"
+                      f"  err={err:.4f}m")
+                ball_pos = est
             else:
                 print(f"  [t={t:.2f}s] ball not visible — using ground truth")
                 ball_pos = state.ball_pos
@@ -593,15 +658,16 @@ def parse_args():
                    help="Path to walk deploy YAML")
     p.add_argument("--kick-deploy-cfg", type=str, default="deploy/configs/Kicking_Robust.yaml",
                    help="Path to kick deploy YAML")
-    p.add_argument("--ball-dist",     type=float, default=1.0,  help="Ball distance from robot [m]")
+    p.add_argument("--ball-dist",     type=float, default=0.4,  help="Ball distance from robot [m]")
     p.add_argument("--switch-dist",   type=float, default=0.4,  help="Distance to switch to kick [m]")
-    p.add_argument("--slowdown-dist", type=float, default=0.6,  help="Distance to start slowing [m]")
+    p.add_argument("--slowdown-dist", type=float, default=1.0,  help="Distance to start slowing [m]")
     p.add_argument("--duration",      type=float, default=10.0, help="Simulation duration [s]")
     p.add_argument("--fps",           type=int,   default=30)
     p.add_argument("--width",         type=int,   default=1280)
     p.add_argument("--height",        type=int,   default=720)
     p.add_argument("--out",           type=str,   default=None)
     p.add_argument("--vx",            type=float, default=0.3,  help="Walk forward speed [m/s]")
+    p.add_argument("--vx-min",        type=float, default=0.1, help="Minimum forward speed during walk slowdown [m/s]")
     p.add_argument("--gait-freq",     type=float, default=1.0,  help="Gait frequency [Hz]")
     p.add_argument("--robot-x",       type=float, default=0.0)
     p.add_argument("--robot-y",       type=float, default=0.0)
