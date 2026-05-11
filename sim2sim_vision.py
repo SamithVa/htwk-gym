@@ -4,7 +4,7 @@ Walk mode : camera bearing → v_yaw, distance → vx, pixel elevation → head_
 Kick mode : vision-estimated ball world position fed to kick policy
             (falls back to ground-truth physics if camera loses the ball)
 
-A red bounding box is drawn around the detected ball in the PIP inset.
+A white bounding box is drawn around the detected ball in the PIP inset.
 """
 
 import argparse
@@ -52,14 +52,14 @@ MIN_BALL_PIXELS  = 10
 MAX_BALL_DEPTH   = 5.0
 
 # Head tracking: pixel error → joint target (normalised by half-image size)
-HEAD_YAW_GAIN    = 0.6    # rad per unit normalised horizontal error
+HEAD_YAW_GAIN    = 0.1    # rad per unit normalised horizontal error
 HEAD_PITCH_GAIN  = 0.4    # rad per unit normalised vertical error
 HEAD_PITCH_BASE  = 0.3    # default downward pitch (rad) when tracking
 HEAD_TARGET_ALPHA = 0.3   # EMA smoothing factor for head targets
 
 # Search sweep when ball is not visible
-HEAD_SEARCH_AMP   = 0.3   # rad — yaw sweep amplitude
-HEAD_SEARCH_PITCH = 0.3   # rad — fixed downward pitch while searching
+HEAD_SEARCH_AMP   = 0.0   # rad — yaw sweep amplitude
+HEAD_SEARCH_PITCH = -0.2  # rad — tilt head up while searching (negative = look up)
 HEAD_SEARCH_SPEED = 0.15  # rad/s — sweep rate
 
 
@@ -344,22 +344,16 @@ def apply_head_control(data, mm, episode, control_dt, detection,
         return
     else:
         kp, kd = head_kp_walk, head_kd_walk
+        episode.head_yaw_target = 0.0  # yaw is always fixed at centre
         if detection is not None:
-            u, v, _ = detection
-            episode.head_search_phase = 0.0
-            # Positive pixel error (ball right of centre) → turn head right (negative yaw)
-            desired_yaw   = episode.head_yaw_target - HEAD_YAW_GAIN * (u - CAM_W / 2.0) / (CAM_W / 2.0)
-            # Positive pixel error (ball below centre) → tilt head down (positive pitch)
+            _, v, _ = detection
+            # Only pitch adjusts (via EMA) to keep ball vertically centered
             desired_pitch = episode.head_pitch_target + HEAD_PITCH_GAIN * (v - CAM_H / 2.0) / (CAM_H / 2.0)
+            episode.head_pitch_target += HEAD_TARGET_ALPHA * (desired_pitch - episode.head_pitch_target)
         else:
-            episode.head_search_phase = (
-                episode.head_search_phase + HEAD_SEARCH_SPEED * control_dt
-            ) % (2.0 * math.pi)
-            desired_yaw   = HEAD_SEARCH_AMP * math.sin(episode.head_search_phase)
+            # Tilt head up while searching
             desired_pitch = HEAD_SEARCH_PITCH
-
-    episode.head_yaw_target   += HEAD_TARGET_ALPHA * (desired_yaw   - episode.head_yaw_target)
-    episode.head_pitch_target += HEAD_TARGET_ALPHA * (desired_pitch - episode.head_pitch_target)
+            episode.head_pitch_target += HEAD_TARGET_ALPHA * (desired_pitch - episode.head_pitch_target)
     episode.head_yaw_target   = float(np.clip(episode.head_yaw_target,   -1.57, 1.57))
     episode.head_pitch_target = float(np.clip(episode.head_pitch_target, -0.35, 1.22))
 
@@ -373,15 +367,20 @@ def apply_head_control(data, mm, episode, control_dt, detection,
 
 # ── Observations ───────────────────────────────────────────────────────────────
 
-def build_walk_obs(state, episode, control_dt, args, default_dof_pos, walk_norm, cmd_scale):
+def build_walk_obs(state, episode, control_dt, args, default_dof_pos, walk_norm, cmd_scale, detection=None):
     """Walk observation: speed ramps down as robot nears ball; yaw rate steers toward ball."""
     span  = max(args.slowdown_dist - args.switch_dist, 1e-6)
     scale = float(np.clip((state.dist_xy - args.switch_dist) / span, 0.0, 1.0))
     vx    = args.vx * scale
     gf    = args.gait_freq * max(0.5, scale)
 
-    ball_local = quat_rotate_inverse_wxyz(state.base_quat_wxyz, state.ball_pos - state.base_pos)
-    yaw_rate   = float(np.clip(1.5 * math.atan2(float(ball_local[1]), float(ball_local[0])), -1.5, 1.5))
+    if detection is not None:
+        u, _, _ = detection
+        # Ball right of centre (u > CAM_W/2) → turn right (negative yaw rate)
+        yaw_rate = float(np.clip(-1.5 * (u - CAM_W / 2.0) / (CAM_W / 2.0), -1.5, 1.5))
+    else:
+        ball_local = quat_rotate_inverse_wxyz(state.base_quat_wxyz, state.ball_pos - state.base_pos)
+        yaw_rate   = float(np.clip(1.5 * math.atan2(float(ball_local[1]), float(ball_local[0])), -1.5, 1.5))
 
     episode.gait_phase      = (episode.gait_phase + control_dt * gf) % 1.0
     episode.walk_command[0] = vx
@@ -458,7 +457,13 @@ def run_episode(model, data, mm, policies, episode, cp, args,
                 walk_norm, kick_norm, default_dof_pos, kp, kd,
                 head_kp_walk, head_kd_walk,
                 renderer, camera, writer, cam_id, intrinsics,
-                head_renderer_rgb, head_renderer_depth):
+                head_renderer_rgb, head_renderer_depth,
+                cam_save_dir=None):
+    cam_save_dir = cam_save_dir or args.cam_save_dir
+    if cam_save_dir:
+        os.makedirs(cam_save_dir, exist_ok=True)
+    detection_save_count = 0
+
     cmd_scale = np.array([
         walk_norm["lin_vel"], walk_norm["lin_vel"], walk_norm["ang_vel"],
         walk_norm["gait_frequency"],
@@ -481,6 +486,13 @@ def run_episode(model, data, mm, policies, episode, cp, args,
         head_rgb  = head_renderer_rgb.render().copy()
         detection = detect_ball(head_rgb)
         head_rgb_annotated = draw_bbox(head_rgb, detection[2]) if detection is not None else head_rgb
+
+        # ── Save head-camera image when ball is detected ──────────────────────
+        if cam_save_dir and detection is not None:
+            if detection_save_count % args.cam_save_every == 0:
+                fname = os.path.join(cam_save_dir, f"cam_{step:05d}_t{t:.3f}s.png")
+                imageio.imwrite(fname, head_rgb_annotated)
+            detection_save_count += 1
 
         # ── Mode transitions (plain `if` blocks like sim2sim.py so RECOVER can
         #    run on the same step as KICK→RECOVER) ──────────────────────────────
@@ -531,7 +543,7 @@ def run_episode(model, data, mm, policies, episode, cp, args,
 
         if episode.mode == MODE_WALK:
             obs, clip = build_walk_obs(state, episode, cp.control_dt, args,
-                                       default_dof_pos, walk_norm, cmd_scale)
+                                       default_dof_pos, walk_norm, cmd_scale, detection=detection)
             episode.last_actions = infer(policies.walk, obs, clip)
 
         else:  # MODE_KICK — ball still on ground, estimate position from vision or GT
@@ -579,7 +591,7 @@ def parse_args():
     p.add_argument("--kick-ckpt",       type=str, default="deploy/models/kicking.pt")
     p.add_argument("--walk-deploy-cfg", type=str, default="deploy/configs/Parameter_Walk.yaml",
                    help="Path to walk deploy YAML")
-    p.add_argument("--kick-deploy-cfg", type=str, default="deploy/configs/Kicking_Robust_44obs.yaml",
+    p.add_argument("--kick-deploy-cfg", type=str, default="deploy/configs/Kicking_Robust.yaml",
                    help="Path to kick deploy YAML")
     p.add_argument("--ball-dist",     type=float, default=1.0,  help="Ball distance from robot [m]")
     p.add_argument("--switch-dist",   type=float, default=0.4,  help="Distance to switch to kick [m]")
@@ -602,6 +614,10 @@ def parse_args():
                    help="Fall detection threshold on -proj_gravity[2] (default %(default)s; sim2sim.py uses 0.5)")
     p.add_argument("--active-head-during-kick", action="store_true",
                    help="Keep head PD active during kick/recover (debug: tests head torque effect)")
+    p.add_argument("--cam-save-dir", type=str, default=None,
+                   help="Directory to save head-camera images when ball is detected (default: disabled)")
+    p.add_argument("--cam-save-every", type=int, default=5,
+                   help="Save one image every N detection steps (default: 5)")
     return p.parse_args()
 
 
