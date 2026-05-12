@@ -23,8 +23,8 @@ runner:
   use_wandb: false
 
 viewer:
-  pos: [3., -3., 2.]  # [m]
-  lookat: [0., 0., 0.]  # [m]
+  pos: [-2.33, 2.33, 1.0]  # [m]  — exact Isaac Gym equiv of sim2sim: distance=3.5, elevation=-20°, azimuth=135°
+  lookat: [0., 0., -0.2]   # [m]  — robot-relative offset; at nominal z=0.7 → world lookat z=0.5 (matches sim2sim)
   record_video: true  # only in play
   record_interval: 5.  # [s]
   record_env_idx: 0

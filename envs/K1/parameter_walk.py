@@ -706,9 +706,6 @@ class ParameterWalk(BaseTask):
             ],
             device=self.device,
         )
-        self.commands = torch.zeros(self.num_envs, self.cfg["commands"]["num_commands"], dtype=torch.float, device=self.device)
-        self.commands[:, 0] = 0.5
-        self.gait_frequency = 1.9
         self.obs_buf = torch.cat(
             (
                 apply_randomization(self.projected_gravity, self.cfg["noise"].get("gravity")) * self.cfg["normalization"]["gravity"],
@@ -730,7 +727,6 @@ class ParameterWalk(BaseTask):
             self.obs_csv_writer.writerow(obs_env0)
             self.obs_csv_file.flush()  # Ensure data is written immediately
         
-        print(self.obs_buf)
         self.privileged_obs_buf = torch.cat(
             (
                 self.base_mass_scaled,
