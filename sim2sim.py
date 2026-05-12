@@ -131,6 +131,7 @@ def parse_args():
     p.add_argument("--camera-dist", type=float, default=3.5, help="Camera distance from robot [m]")
     p.add_argument("--camera-elev", type=float, default=-20, help="Camera elevation angle [deg]")
     p.add_argument("--camera-azim", type=float, default=135, help="Camera azimuth angle [deg]")
+    p.add_argument("--csv", type=str, default=None, help="Save walk-mode log (actions + joints) to this CSV path")
     return p.parse_args()
 
 def load_yaml(path):
@@ -388,13 +389,20 @@ def log_progress(step, control_dt, state, mode):
 
 def run_episode(model, data, model_maps, policies, episode, control, args,
                 walk_norm, kick_norm, kick_logic, default_joint_pos, kp, kd,
-                renderer, camera, writer, viewer=None):
+                renderer, camera, writer, viewer=None, csv_path=None):
     walk_cmd_scale = np.array([
         walk_norm["lin_vel"], walk_norm["lin_vel"], walk_norm["ang_vel"],
         walk_norm["gait_frequency"], walk_norm["foot_yaw"], walk_norm["foot_yaw"],
         walk_norm["body_pitch_target"], walk_norm["body_roll_target"],
         walk_norm["feet_offset_x_target"], walk_norm["feet_offset_y_target"],
     ], dtype=np.float32)
+
+    _csv_f, _csv_w = None, None
+    if csv_path:
+        import csv as _csv
+        os.makedirs(os.path.dirname(csv_path) or ".", exist_ok=True)
+        _csv_f = open(csv_path, "w", newline="")
+        _csv_w = _csv.writer(_csv_f)
 
     start_time = time.time()
     try:
@@ -446,6 +454,10 @@ def run_episode(model, data, model_maps, policies, episode, control, args,
                 obs, clip_actions = build_walk_observation(
                     state, episode, control.control_dt, args, default_joint_pos, walk_norm, walk_cmd_scale)
                 policy = policies.walk
+                if _csv_w is not None:
+                    if step == 0:
+                        _csv_w.writerow(["step"] + [f"obs_{i}" for i in range(len(obs))])
+                    _csv_w.writerow([step] + obs.tolist())
             else:  # MODE_KICK
                 obs, clip_actions = build_kick_observation(state, episode, default_joint_pos, kick_norm)
                 policy = policies.kick
@@ -460,6 +472,8 @@ def run_episode(model, data, model_maps, policies, episode, control, args,
             writer.close()
         if renderer is not None:
             del renderer
+        if _csv_f is not None:
+            _csv_f.close()
 
     print(f"Done in {time.time() - start_time:.1f}s.")
     print(f"Final ball pos: {data.qpos[model_maps.ball_qpos_adr:model_maps.ball_qpos_adr + 3]}")
@@ -487,13 +501,13 @@ def main():
         print(f"Rendering to {paths.out_path} ({control.n_ctrl_steps} steps, render every {control.render_every})")
         run_episode(model, data, model_maps, policies, episode, control, args,
                     walk_norm, kick_norm, kick_logic, default_joint_pos, kp, kd,
-                    renderer, camera, writer)
+                    renderer, camera, writer, csv_path=args.csv)
         print(f"Video: {paths.out_path}")
     else:
         with mujoco.viewer.launch_passive(model, data) as viewer:
             run_episode(model, data, model_maps, policies, episode, control, args,
                         walk_norm, kick_norm, kick_logic, default_joint_pos, kp, kd,
-                        None, None, None, viewer=viewer)
+                        None, None, None, viewer=viewer, csv_path=args.csv)
 
 
 if __name__ == "__main__":

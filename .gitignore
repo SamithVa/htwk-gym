@@ -13,3 +13,6 @@ __pycache__/
 .vscode/
 
 cam_frames/
+
+# sim2sim xml 
+_*
